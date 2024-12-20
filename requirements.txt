@@ -1,8 +1,7 @@
 torch>=2
 torchaudio>=2
-faster-whisper==1.0.0
-ctranslate2==4.4.0
-transformers
-pandas
+transformers[torch]==4.39.3
+numpy<2
+pandas==2.2.3
 setuptools>=65
-nltk
+nltk==3.9.1
