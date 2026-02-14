@@ -1,15 +1,18 @@
 """"
-Forced Alignment with Whisper
-C. Max Bain
+Forced Alignment with Qwen3-ForcedAligner
+Based on WhisperX by C. Max Bain
+Modified to use Qwen3-ForcedAligner
 """
 from dataclasses import dataclass
 from typing import Iterable, Union, List
+import warnings
 
 import numpy as np
 import pandas as pd
 import torch
 import torchaudio
-from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
+from tqdm import tqdm
+from qwen_asr import Qwen3ForcedAligner
 
 from .audio import SAMPLE_RATE, load_audio
 from .utils import interpolate_nans
@@ -21,84 +24,84 @@ PUNKT_ABBREVIATIONS = ['dr', 'vs', 'mr', 'mrs', 'prof']
 
 LANGUAGES_WITHOUT_SPACES = ["ja", "zh"]
 
-DEFAULT_ALIGN_MODELS_TORCH = {
-    "en": "WAV2VEC2_ASR_BASE_960H",
-    "fr": "VOXPOPULI_ASR_BASE_10K_FR",
-    "de": "VOXPOPULI_ASR_BASE_10K_DE",
-    "es": "VOXPOPULI_ASR_BASE_10K_ES",
-    "it": "VOXPOPULI_ASR_BASE_10K_IT",
-}
+# Qwen3-ForcedAligner supported languages (11 languages)
+QWEN_ALIGNER_SUPPORTED_LANGUAGES = [
+    "en", "zh", "de", "es", "fr", "ja", "ko", "pt", "ru", "tr", "ar"
+]
 
-DEFAULT_ALIGN_MODELS_HF = {
-    "ja": "jonatasgrosman/wav2vec2-large-xlsr-53-japanese",
-    "zh": "jonatasgrosman/wav2vec2-large-xlsr-53-chinese-zh-cn",
-    "nl": "jonatasgrosman/wav2vec2-large-xlsr-53-dutch",
-    "uk": "Yehor/wav2vec2-xls-r-300m-uk-with-small-lm",
-    "pt": "jonatasgrosman/wav2vec2-large-xlsr-53-portuguese",
-    "ar": "jonatasgrosman/wav2vec2-large-xlsr-53-arabic",
-    "cs": "comodoro/wav2vec2-xls-r-300m-cs-250",
-    "ru": "jonatasgrosman/wav2vec2-large-xlsr-53-russian",
-    "pl": "jonatasgrosman/wav2vec2-large-xlsr-53-polish",
-    "hu": "jonatasgrosman/wav2vec2-large-xlsr-53-hungarian",
-    "fi": "jonatasgrosman/wav2vec2-large-xlsr-53-finnish",
-    "fa": "jonatasgrosman/wav2vec2-large-xlsr-53-persian",
-    "el": "jonatasgrosman/wav2vec2-large-xlsr-53-greek",
-    "tr": "mpoyraz/wav2vec2-xls-r-300m-cv7-turkish",
-    "da": "saattrupdan/wav2vec2-xls-r-300m-ftspeech",
-    "he": "imvladikon/wav2vec2-xls-r-300m-hebrew",
-    "vi": 'nguyenvulebinh/wav2vec2-base-vi',
-    "ko": "kresnik/wav2vec2-large-xlsr-korean",
-    "ur": "kingabzpro/wav2vec2-large-xls-r-300m-Urdu",
-    "te": "anuragshas/wav2vec2-large-xlsr-53-telugu",
-    "hi": "theainerd/Wav2Vec2-large-xlsr-hindi",
-    "ca": "softcatala/wav2vec2-large-xlsr-catala",
-    "ml": "gvs/wav2vec2-large-xlsr-malayalam",
-    "no": "NbAiLab/nb-wav2vec2-1b-bokmaal-v2",
-    "nn": "NbAiLab/nb-wav2vec2-1b-nynorsk",
-    "sk": "comodoro/wav2vec2-xls-r-300m-sk-cv8",
-    "sl": "anton-l/wav2vec2-large-xlsr-53-slovenian",
-    "hr": "classla/wav2vec2-xls-r-parlaspeech-hr",
-    "ro": "gigant/romanian-wav2vec2",
-    "eu": "stefan-it/wav2vec2-large-xlsr-53-basque",
-    "gl": "ifrz/wav2vec2-large-xlsr-galician",
-    "ka": "xsway/wav2vec2-large-xlsr-georgian",
+DEFAULT_QWEN_ALIGNER = "Qwen/Qwen3-ForcedAligner-0.6B"
+
+# Language code to full name mapping for Qwen3-ForcedAligner
+LANGUAGE_CODE_TO_NAME = {
+    "en": "English",
+    "zh": "Chinese",
+    "de": "German",
+    "es": "Spanish",
+    "fr": "French",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "pt": "Portuguese",
+    "ru": "Russian",
+    "tr": "Turkish",
+    "ar": "Arabic",
 }
 
 
 def load_align_model(language_code, device, model_name=None, model_dir=None):
+    """
+    Load Qwen3-ForcedAligner for word-level timestamps.
+
+    Args:
+        language_code: ISO 639-1 language code
+        device: Device to load model on
+        model_name: Optional custom aligner model name
+        model_dir: Unused, kept for API compatibility
+
+    Returns:
+        Tuple of (aligner_model, metadata)
+    """
+    # Check if language is supported
+    if language_code not in QWEN_ALIGNER_SUPPORTED_LANGUAGES:
+        warnings.warn(
+            f"Qwen3-ForcedAligner does not officially support language '{language_code}'. "
+            f"Supported languages: {QWEN_ALIGNER_SUPPORTED_LANGUAGES}. "
+            f"Alignment may not work correctly."
+        )
+
+    # Use default model if none specified
     if model_name is None:
-        # use default model
-        if language_code in DEFAULT_ALIGN_MODELS_TORCH:
-            model_name = DEFAULT_ALIGN_MODELS_TORCH[language_code]
-        elif language_code in DEFAULT_ALIGN_MODELS_HF:
-            model_name = DEFAULT_ALIGN_MODELS_HF[language_code]
+        model_name = DEFAULT_QWEN_ALIGNER
+
+    # Map device to device_map format
+    if isinstance(device, str):
+        if device.startswith("cuda"):
+            device_map = device
+        elif device == "cpu":
+            device_map = "cpu"
         else:
-            print(f"There is no default alignment model set for this language ({language_code}).\
-                Please find a wav2vec2.0 model finetuned on this language in https://huggingface.co/models, then pass the model name in --align_model [MODEL_NAME]")
-            raise ValueError(f"No default align-model for language: {language_code}")
-
-    if model_name in torchaudio.pipelines.__all__:
-        pipeline_type = "torchaudio"
-        bundle = torchaudio.pipelines.__dict__[model_name]
-        align_model = bundle.get_model(dl_kwargs={"model_dir": model_dir}).to(device)
-        labels = bundle.get_labels()
-        align_dictionary = {c.lower(): i for i, c in enumerate(labels)}
+            device_map = "cuda:0"
     else:
-        try:
-            processor = Wav2Vec2Processor.from_pretrained(model_name)
-            align_model = Wav2Vec2ForCTC.from_pretrained(model_name)
-        except Exception as e:
-            print(e)
-            print(f"Error loading model from huggingface, check https://huggingface.co/models for finetuned wav2vec2.0 models")
-            raise ValueError(f'The chosen align_model "{model_name}" could not be found in huggingface (https://huggingface.co/models) or torchaudio (https://pytorch.org/audio/stable/pipelines.html#id14)')
-        pipeline_type = "huggingface"
-        align_model = align_model.to(device)
-        labels = processor.tokenizer.get_vocab()
-        align_dictionary = {char.lower(): code for char,code in processor.tokenizer.get_vocab().items()}
+        # Assume it's a torch.device
+        device_map = str(device)
 
-    align_metadata = {"language": language_code, "dictionary": align_dictionary, "type": pipeline_type}
+    print(f"Loading Qwen3-ForcedAligner: {model_name}")
+    try:
+        aligner = Qwen3ForcedAligner.from_pretrained(
+            model_name,
+            device_map=device_map,
+            dtype=torch.bfloat16,
+        )
+    except Exception as e:
+        print(f"Error loading Qwen3-ForcedAligner: {e}")
+        raise ValueError(f"Failed to load Qwen3-ForcedAligner '{model_name}'")
 
-    return align_model, align_metadata
+    align_metadata = {
+        "language": language_code,
+        "type": "qwen3",
+        "model_name": model_name
+    }
+
+    return aligner, align_metadata
 
 
 def align(
@@ -113,24 +116,383 @@ def align(
     combined_progress: bool = False,
 ) -> AlignedTranscriptionResult:
     """
-    Align phoneme recognition predictions to known transcription.
+    Align transcription using Qwen3-ForcedAligner to get word-level timestamps.
+
+    Args:
+        transcript: Segments with text and timestamps
+        model: Qwen3-ForcedAligner model
+        align_model_metadata: Metadata including language and model type
+        audio: Audio data (path, numpy array, or torch tensor)
+        device: Device for computation
+        interpolate_method: Method to handle missing timestamps
+        return_char_alignments: Whether to return character-level alignments
+        print_progress: Whether to print progress
+        combined_progress: Whether this is part of combined progress
+
+    Returns:
+        Aligned transcription with word-level timestamps
     """
-    
+
+    # Load audio if needed
     if not torch.is_tensor(audio):
         if isinstance(audio, str):
             audio = load_audio(audio)
         audio = torch.from_numpy(audio)
     if len(audio.shape) == 1:
         audio = audio.unsqueeze(0)
-    
+
     MAX_DURATION = audio.shape[1] / SAMPLE_RATE
 
-    model_dictionary = align_model_metadata["dictionary"]
     model_lang = align_model_metadata["language"]
-    model_type = align_model_metadata["type"]
+    model_type = align_model_metadata.get("type", "qwen3")
+
+    # For Qwen3-ForcedAligner, use a different alignment approach
+    if model_type == "qwen3":
+        return _align_with_qwen3(
+            transcript,
+            model,
+            model_lang,
+            audio,
+            MAX_DURATION,
+            interpolate_method,
+            return_char_alignments,
+            print_progress,
+            combined_progress,
+        )
+
+    # Fall back to original Wav2Vec2 alignment for compatibility
+    # (This is the legacy path, kept for reference)
+    model_dictionary = align_model_metadata.get("dictionary", {})
 
     # 1. Preprocess to keep only characters in dictionary
     total_segments = len(transcript)
+
+
+def _align_with_qwen3(
+    transcript: Iterable[SingleSegment],
+    model: Qwen3ForcedAligner,
+    language: str,
+    audio: torch.Tensor,
+    max_duration: float,
+    interpolate_method: str,
+    return_char_alignments: bool,
+    print_progress: bool,
+    combined_progress: bool,
+) -> AlignedTranscriptionResult:
+    """
+    Align transcription using Qwen3-ForcedAligner.
+
+    This function uses Qwen3-ForcedAligner to generate word-level timestamps
+    for each segment in the transcript.
+    """
+    aligned_segments: List[SingleAlignedSegment] = []
+    transcript_list = list(transcript)
+    total_segments = len(transcript_list)
+
+    punkt_param = PunktParameters()
+    punkt_param.abbrev_types = set(PUNKT_ABBREVIATIONS)
+    sentence_splitter = PunktSentenceTokenizer(punkt_param)
+
+    # Create progress bar
+    pbar = None
+    if print_progress:
+        pbar_desc = "Aligning (100%)" if combined_progress else "Aligning"
+        pbar = tqdm(total=total_segments, desc=pbar_desc, unit="segment")
+
+    for sdx, segment in enumerate(transcript_list):
+        if pbar:
+            pbar.update(1)
+
+        t1 = segment["start"]
+        t2 = segment["end"]
+        text = segment["text"]
+
+        # Skip empty segments
+        if not text or len(text.strip()) == 0:
+            aligned_segments.append({
+                "start": t1,
+                "end": t2,
+                "text": text,
+                "words": [],
+            })
+            continue
+
+        # Check segment validity
+        if t1 >= max_duration:
+            print(f'Skipping segment ("{text}"): start time beyond audio duration')
+            aligned_segments.append({
+                "start": t1,
+                "end": t2,
+                "text": text,
+                "words": [],
+            })
+            continue
+
+        # Extract audio segment
+        f1 = int(t1 * SAMPLE_RATE)
+        f2 = int(t2 * SAMPLE_RATE)
+        audio_segment = audio[:, f1:f2].squeeze(0)
+
+        # Use Qwen3-ForcedAligner to get word-level timestamps
+        try:
+            # Convert audio to numpy array and pass as tuple (waveform, sample_rate)
+            audio_np = audio_segment.cpu().numpy()
+
+            # Convert language code to full name (e.g., "ja" -> "Japanese")
+            lang_name = LANGUAGE_CODE_TO_NAME.get(language, "English")
+
+            # Call the align method with text
+            align_results = model.align(
+                audio=(audio_np, SAMPLE_RATE),
+                text=text,
+                language=lang_name,
+            )
+
+            # Parse alignment results
+            if align_results and len(align_results) > 0:
+                result = align_results[0]
+                # Extract word timings from ForcedAlignResult
+                words = _parse_word_timings(result, text, t1, t2, language)
+            else:
+                # Fallback: split text into words without precise timing
+                words = _create_fallback_words(text, t1, t2, language)
+
+        except Exception as e:
+            warnings.warn(f"Alignment failed for segment '{text}': {e}. Using fallback.")
+            words = _create_fallback_words(text, t1, t2, language)
+
+        # Split into sentences
+        sentence_spans = list(sentence_splitter.span_tokenize(text))
+
+        # Create aligned subsegments for each sentence
+        aligned_subsegments = []
+        for sstart, send in sentence_spans:
+            sentence_text = text[sstart:send]
+
+            # Find words that belong to this sentence
+            sentence_words = []
+            for word in words:
+                word_text = word.get("word", "")
+                # Simple heuristic: word belongs to sentence if it's in the sentence text
+                if word_text in sentence_text:
+                    sentence_words.append(word)
+
+            # Calculate sentence start/end from word timings
+            sentence_start = min([w["start"] for w in sentence_words]) if sentence_words else t1
+            sentence_end = max([w["end"] for w in sentence_words]) if sentence_words else t2
+
+            aligned_subsegments.append({
+                "text": sentence_text,
+                "start": sentence_start,
+                "end": sentence_end,
+                "words": sentence_words,
+            })
+
+        aligned_segments += aligned_subsegments
+
+    # Close progress bar
+    if pbar:
+        pbar.close()
+
+    # Create word_segments list
+    word_segments: List[SingleWordSegment] = []
+    for segment in aligned_segments:
+        word_segments += segment.get("words", [])
+
+    return {"segments": aligned_segments, "word_segments": word_segments}
+
+
+def _restore_punctuation(words: List[dict], original_text: str, language: str) -> List[dict]:
+    """
+    Restore punctuation from original text to aligned words.
+
+    The forced aligner removes punctuation during tokenization, so we need to
+    add it back by matching words to the original text.
+
+    Args:
+        words: List of word dictionaries from aligner (without punctuation)
+        original_text: Original text with punctuation
+        language: Language code
+
+    Returns:
+        List of word dictionaries with punctuation restored
+    """
+    if not words:
+        return words
+
+    # Build clean text from aligned words (without punctuation)
+    aligned_chars = [w["word"] for w in words]
+
+    # Match each aligned word/char to position in original text
+    result_words = []
+    orig_idx = 0
+
+    for i, word_dict in enumerate(words):
+        word_clean = word_dict["word"]
+
+        # Find this word/char in original text starting from orig_idx
+        start_search = orig_idx
+        word_start = original_text.find(word_clean, start_search)
+
+        if word_start == -1:
+            # If not found, keep word as-is
+            result_words.append(word_dict)
+            continue
+
+        # Collect any punctuation before this word (shouldn't happen usually)
+        prefix_punct = original_text[orig_idx:word_start]
+
+        # The word itself
+        word_end = word_start + len(word_clean)
+
+        # Collect punctuation after this word (before next word)
+        punct_end = word_end
+        # Look ahead to see where next word starts (or end of text)
+        if i + 1 < len(words):
+            next_word = words[i + 1]["word"]
+            next_pos = original_text.find(next_word, word_end)
+            if next_pos != -1:
+                punct_end = next_pos
+            else:
+                # Next word not found, take all remaining punctuation
+                punct_end = len(original_text)
+        else:
+            # Last word, take all remaining text
+            punct_end = len(original_text)
+
+        # Extract the word with following punctuation
+        word_with_punct = original_text[word_start:punct_end]
+
+        # For languages without spaces, be more conservative
+        # Only include punctuation that directly follows (no spaces)
+        if language in LANGUAGES_WITHOUT_SPACES:
+            # Take word + immediately following punctuation
+            punct_idx = word_end
+            while punct_idx < len(original_text):
+                ch = original_text[punct_idx]
+                if _is_cjk_char(ch) or ch.isalnum():
+                    break
+                punct_idx += 1
+            word_with_punct = original_text[word_start:punct_idx]
+            orig_idx = punct_idx
+        else:
+            orig_idx = punct_end
+
+        result_words.append({
+            "word": word_with_punct.strip() if language not in LANGUAGES_WITHOUT_SPACES else word_with_punct,
+            "start": word_dict["start"],
+            "end": word_dict["end"],
+            "score": word_dict.get("score", 1.0),
+        })
+
+    return result_words
+
+
+def _is_cjk_char(ch: str) -> bool:
+    """Check if character is CJK (Chinese/Japanese/Korean)"""
+    if not ch:
+        return False
+    code = ord(ch)
+    return (
+        0x4E00 <= code <= 0x9FFF or     # CJK Unified Ideographs
+        0x3400 <= code <= 0x4DBF or     # Extension A
+        0x20000 <= code <= 0x2A6DF or   # Extension B
+        0x3040 <= code <= 0x309F or     # Hiragana
+        0x30A0 <= code <= 0x30FF or     # Katakana
+        0xAC00 <= code <= 0xD7AF        # Hangul
+    )
+
+
+def _parse_word_timings(
+    result,
+    text: str,
+    segment_start: float,
+    segment_end: float,
+    language: str,
+) -> List[dict]:
+    """
+    Parse word-level timings from Qwen3-ForcedAligner result.
+
+    Args:
+        result: ForcedAlignResult object with items attribute
+        text: Original segment text
+        segment_start: Segment start time in the full audio
+        segment_end: Segment end time in the full audio
+        language: Language code
+
+    Returns:
+        List of word dictionaries with timestamps
+    """
+    words = []
+
+    # Parse ForcedAlignResult items
+    if hasattr(result, 'items') and result.items:
+        for item in result.items:
+            words.append({
+                "word": item.text,
+                "start": segment_start + item.start_time,
+                "end": segment_start + item.end_time,
+                "score": 1.0,
+            })
+
+        # Restore punctuation from original text
+        words = _restore_punctuation(words, text, language)
+    else:
+        # Fallback: create uniform word distribution
+        words = _create_fallback_words(text, segment_start, segment_end, language)
+
+    return words
+
+
+def _create_fallback_words(
+    text: str,
+    start: float,
+    end: float,
+    language: str,
+) -> List[dict]:
+    """
+    Create word segments with uniform time distribution when alignment fails.
+
+    Args:
+        text: Text to split into words
+        start: Segment start time
+        end: Segment end time
+        language: Language code
+
+    Returns:
+        List of word dictionaries with estimated timestamps
+    """
+    # Split text into words
+    if language not in LANGUAGES_WITHOUT_SPACES:
+        words_list = text.split()
+    else:
+        # For languages without spaces (Chinese, Japanese), treat each character as a unit
+        words_list = list(text)
+
+    if not words_list:
+        return []
+
+    # Distribute time uniformly across words
+    duration = end - start
+    time_per_word = duration / len(words_list)
+
+    words = []
+    for i, word in enumerate(words_list):
+        word_start = start + i * time_per_word
+        word_end = start + (i + 1) * time_per_word
+        words.append({
+            "word": word,
+            "start": round(word_start, 3),
+            "end": round(word_end, 3),
+            "score": 1.0,  # Default score
+        })
+
+    return words
+
+
+# Legacy Wav2Vec2 alignment code below (for reference, not used with Qwen3)
+def _legacy_wav2vec2_align(transcript, model_dictionary, model_type, model_lang):
+    """Legacy alignment code for Wav2Vec2 models. Not used with Qwen3."""
     for sdx, segment in enumerate(transcript):
         # strip spaces at beginning / end, but keep track of the amount.
         if print_progress:

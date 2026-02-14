@@ -25,8 +25,13 @@ def cli():
     parser.add_argument("--output_format", "-f", type=str, default="all", choices=["all", "srt", "vtt", "txt", "tsv", "json", "aud"], help="format of the output file; if not specified, all available formats will be produced")
     parser.add_argument("--verbose", type=str2bool, default=True, help="whether to print out the progress and debug messages")
 
-    parser.add_argument("--task", type=str, default="transcribe", choices=["transcribe", "translate"], help="whether to perform X->X speech recognition ('transcribe') or X->English translation ('translate')")
+    parser.add_argument("--task", type=str, default="transcribe", choices=["transcribe", "translate"], help="[DEPRECATED] Qwen3-ASR only supports transcription. Translation is not available.")
     parser.add_argument("--language", type=str, default=None, choices=sorted(LANGUAGES.keys()) + sorted([k.title() for k in TO_LANGUAGE_CODE.keys()]), help="language spoken in the audio, specify None to perform language detection")
+
+    # Qwen3-ASR specific params
+    parser.add_argument("--forced_aligner", type=str, default=None, help="Qwen3-ForcedAligner model for word-level timestamps (e.g., 'Qwen/Qwen3-ForcedAligner-0.6B')")
+    parser.add_argument("--max_inference_batch_size", type=int, default=32, help="Maximum batch size for Qwen3-ASR inference")
+    parser.add_argument("--dtype", type=str, default="bfloat16", choices=["bfloat16", "float16", "float32"], help="Model precision (bfloat16 recommended for Qwen3-ASR)")
 
     # alignment params
     parser.add_argument("--align_model", default=None, help="Name of phoneme-level ASR model to do alignment")
@@ -70,14 +75,24 @@ def cli():
     output_format: str = args.pop("output_format")
     device: str = args.pop("device")
 
+    # Qwen3-ASR specific params
+    forced_aligner: str = args.pop("forced_aligner")
+    max_inference_batch_size: int = args.pop("max_inference_batch_size")
+    dtype: str = args.pop("dtype")
+
     # model_flush: bool = args.pop("model_flush")
     os.makedirs(output_dir, exist_ok=True)
 
     align_model: str = args.pop("align_model")
     interpolate_method: str = args.pop("interpolate_method")
     no_align: bool = args.pop("no_align")
-    task : str = args.pop("task")
+    task: str = args.pop("task")
     if task == "translate":
+        warnings.warn(
+            "Translation task is not supported in Qwen3-ASR. Only transcription is available. "
+            "Proceeding with transcription."
+        )
+        task = "transcribe"
         # translation cannot be aligned
         no_align = True
 
@@ -127,7 +142,15 @@ def cli():
     results = []
     tmp_results = []
     # model = load_model(model_name, device=device, download_root=model_dir)
-    model = load_model(model_name, device=device, language=args['language'], task=task, vad_options={"vad_onset": vad_onset, "vad_offset": vad_offset})
+    model = load_model(
+        model_name,
+        device=device,
+        language=args['language'],
+        forced_aligner=forced_aligner,
+        max_inference_batch_size=max_inference_batch_size,
+        dtype=dtype,
+        vad_options={"vad_onset": vad_onset, "vad_offset": vad_offset}
+    )
 
     for audio_path in args.pop("audio"):
         audio = load_audio(audio_path)
