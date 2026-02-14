@@ -256,7 +256,7 @@ def load_model(
     else:
         vad = load_vad_model(
             torch.device(device if isinstance(device, str) else f"cuda:{device}" if device >= 0 else "cpu"),
-            use_auth_token=None,
+            token=None,
             **default_vad_options
         )
 

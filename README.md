@@ -65,7 +65,7 @@ You may also need to install ffmpeg. Follow instructions from [OpenAI Whisper se
 
 To **enable Speaker Diarization**, include your Hugging Face access token (read) that you can generate from [here](https://huggingface.co/settings/tokens) after the `--hf_token` argument. Accept the user agreements for:
 - [Segmentation](https://huggingface.co/pyannote/segmentation-3.0)
-- [Speaker-Diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)
+- [Speaker-Diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
 
 ## Usage 💬
 
@@ -152,7 +152,7 @@ del model_a
 
 # 3. Assign speaker labels (optional)
 import torch
-diarize_model = whisperx.DiarizationPipeline(use_auth_token=YOUR_HF_TOKEN, device=device)
+diarize_model = whisperx.DiarizationPipeline(token=YOUR_HF_TOKEN, device=device)
 diarize_segments = diarize_model(audio_file)
 result = whisperx.assign_word_speakers(diarize_segments, result)
 print(result["segments"])  # segments with speaker IDs

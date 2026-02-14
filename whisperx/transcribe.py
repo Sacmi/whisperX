@@ -17,7 +17,7 @@ def cli():
     # fmt: off
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("audio", nargs="+", type=str, help="audio file(s) to transcribe")
-    parser.add_argument("--model", default="small", help="name of the Whisper model to use")
+    parser.add_argument("--model", default="Qwen/Qwen3-ASR-1.7B", help="name of the qwen model to use")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu", help="device to use for PyTorch inference")
     parser.add_argument("--batch_size", default=8, type=int, help="the preferred batch size for inference")
 
@@ -199,7 +199,7 @@ def cli():
         tmp_results = results
         print(">>Performing diarization...")
         results = []
-        diarize_model = DiarizationPipeline(use_auth_token=hf_token, device=device)
+        diarize_model = DiarizationPipeline(token=hf_token, device=device)
         for result, input_audio_path in tmp_results:
             diarize_segments = diarize_model(input_audio_path, min_speakers=min_speakers, max_speakers=max_speakers)
             result = assign_word_speakers(diarize_segments, result)

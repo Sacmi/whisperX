@@ -1,9 +1,0 @@
-torch>=2
-torchaudio>=2
-numpy<2
-pandas==2.2.3
-setuptools>=65
-nltk==3.9.1
-qwen-asr
-pyannote.audio
-

@@ -18,7 +18,7 @@ from .diarize import Segment as SegmentX
 # deprecated
 VAD_SEGMENTATION_URL = "https://whisperx.s3.eu-west-2.amazonaws.com/model_weights/segmentation/0b5b3216d60a2d32fc086b47ea8c67589aaeb26b7e07fcbe620d6d0b83e209ea/pytorch_model.bin"
 
-def load_vad_model(device, vad_onset=0.500, vad_offset=0.363, use_auth_token=None, model_fp=None):
+def load_vad_model(device, vad_onset=0.500, vad_offset=0.363, token=None, model_fp=None):
     model_dir = torch.hub._get_torch_home()
 
     vad_dir = os.path.dirname(os.path.abspath(__file__))
@@ -44,7 +44,7 @@ def load_vad_model(device, vad_onset=0.500, vad_offset=0.363, use_auth_token=Non
             "Model has been downloaded but the SHA256 checksum does not match. Please retry loading the model."
         )
 
-    vad_model = Model.from_pretrained(model_fp, use_auth_token=use_auth_token)
+    vad_model = Model.from_pretrained(model_fp, token=token)
     hyperparameters = {"onset": vad_onset, 
                     "offset": vad_offset,
                     "min_duration_on": 0.1,
@@ -196,11 +196,11 @@ class VoiceActivitySegmentation(VoiceActivityDetection):
         self,
         segmentation: PipelineModel = "pyannote/segmentation",
         fscore: bool = False,
-        use_auth_token: Union[Text, None] = None,
+        token: Union[Text, None] = None,
         **inference_kwargs,
     ):
 
-        super().__init__(segmentation=segmentation, fscore=fscore, use_auth_token=use_auth_token, **inference_kwargs)
+        super().__init__(segmentation=segmentation, fscore=fscore, token=token, **inference_kwargs)
 
     def apply(self, file: AudioFile, hook: Optional[Callable] = None) -> Annotation:
         """Apply voice activity detection
