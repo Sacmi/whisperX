@@ -39,24 +39,28 @@ This repository provides fast automatic speech recognition with word-level times
 
 Tested with Python 3.10 and PyTorch 2.
 
-### 1. Create Python Environment
+This project uses [uv](https://docs.astral.sh/uv/) for dependency management. Make sure you have uv installed.
 
+### Install WhisperX with Qwen3-ASR
+
+For regular installation:
 ```bash
-micromamba create --name whisperx python=3.10
-micromamba activate whisperx
+uv pip install git+https://github.com/Sacmi/whisperX.git
 ```
 
-### 2. Install WhisperX with Qwen3-ASR
-
-```bash
-pip install git+https://github.com/Sacmi/whisperX.git
-```
-
-For development:
+For development (with uv.lock):
 ```bash
 git clone https://github.com/Sacmi/whisperX.git
 cd whisperX
-pip install -e .
+uv sync  # Automatically creates venv and installs dependencies
+source .venv/bin/activate
+```
+
+For editable development install:
+```bash
+git clone https://github.com/Sacmi/whisperX.git
+cd whisperX
+uv pip install -e .
 ```
 
 You may also need to install ffmpeg. Follow instructions from [OpenAI Whisper setup](https://github.com/openai/whisper#setup).
