@@ -23,7 +23,7 @@ def cli():
     # fmt: off
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("audio", nargs="+", type=str, help="audio file(s) to transcribe")
-    parser.add_argument("--model", default="Qwen/Qwen3-ASR-1.7B", help="name of the qwen model to use")
+    parser.add_argument("--model", default="Qwen/Qwen3-ASR-1.7B", help="name of the ASR model (e.g., Qwen/Qwen3-ASR-1.7B or CohereLabs/cohere-transcribe-03-2026)")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu", help="device to use for PyTorch inference")
     parser.add_argument("--batch_size", default=8, type=int, help="the preferred batch size for inference")
 

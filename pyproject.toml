@@ -16,6 +16,11 @@ dependencies = [
     "nltk==3.9.1",
     "pyannote.audio>=4.0.0",
     "qwen-asr",
+    "transformers>=4.56",
+    "soundfile",
+    "librosa",
+    "sentencepiece",
+    "protobuf",
     "omegaconf>=2.3.0",
     "numba>=0.60",
 ]

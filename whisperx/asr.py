@@ -8,6 +8,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 from qwen_asr import Qwen3ASRModel
+from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq
 
 from .audio import SAMPLE_RATE, load_audio
 from .vad import load_vad_model, merge_chunks
@@ -70,6 +71,11 @@ WHISPERX_TO_QWEN_LANGUAGE = {
 
 # Reverse mapping for language detection
 QWEN_TO_WHISPERX_LANGUAGE = {v: k for k, v in WHISPERX_TO_QWEN_LANGUAGE.items()}
+
+# Cohere Transcribe supported languages (ISO 639-1 codes)
+COHERE_SUPPORTED_LANGUAGES = {
+    "en", "de", "fr", "it", "es", "pt", "el", "nl", "pl", "zh", "ja", "ko", "vi", "ar"
+}
 
 
 class Qwen3ASRPipeline:
@@ -216,6 +222,163 @@ class Qwen3ASRPipeline:
         return {"segments": segments, "language": detected_language or "en"}
 
 
+class CohereASRPipeline:
+    """
+    Cohere Transcribe model wrapper for WhisperX compatibility.
+    """
+
+    def __init__(
+        self,
+        processor,
+        asr_model,
+        vad,
+        vad_params: dict,
+        device: Union[int, str, "torch.device"],
+        language: Optional[str] = None,
+        max_inference_batch_size: int = 32,
+    ):
+        self.processor = processor
+        self.asr_model = asr_model
+        self.vad_model = vad
+        self.vad_params = vad_params
+        self.device = device
+        self.language = language
+        self.max_inference_batch_size = max_inference_batch_size
+
+    def transcribe(
+        self,
+        audio: Union[str, np.ndarray],
+        batch_size=None,
+        chunk_size=30,
+        print_progress=False,
+        combined_progress=False,
+    ) -> TranscriptionResult:
+        """
+        Transcribe audio using Cohere Transcribe with VAD segmentation.
+        """
+        if isinstance(audio, str):
+            audio = load_audio(audio)
+
+        # Apply VAD segmentation
+        vad_segments = self.vad_model(
+            {
+                "waveform": torch.from_numpy(audio).unsqueeze(0),
+                "sample_rate": SAMPLE_RATE,
+            }
+        )
+        vad_segments = merge_chunks(
+            vad_segments,
+            chunk_size,
+            onset=self.vad_params.get("vad_onset", 0.500),
+            offset=self.vad_params.get("vad_offset", 0.363),
+        )
+
+        # Extract audio chunks as numpy arrays
+        audio_chunks = []
+        for seg in vad_segments:
+            f1 = int(seg["start"] * SAMPLE_RATE)
+            f2 = int(seg["end"] * SAMPLE_RATE)
+            audio_chunks.append(audio[f1:f2])
+
+        if len(audio_chunks) == 0:
+            return {"segments": [], "language": self.language or "ja"}
+
+        total_segments = len(audio_chunks)
+        segments: List[SingleSegment] = []
+        process_batch_size = min(batch_size or 8, self.max_inference_batch_size)
+
+        pbar = None
+        if print_progress:
+            pbar_desc = "Transcribing (50%)" if combined_progress else "Transcribing"
+            pbar = tqdm(total=total_segments, desc=pbar_desc, unit="segment")
+
+        for batch_start in range(0, total_segments, process_batch_size):
+            batch_end = min(batch_start + process_batch_size, total_segments)
+            batch_chunks = audio_chunks[batch_start:batch_end]
+            batch_vad_segments = vad_segments[batch_start:batch_end]
+
+            batch_results = self.asr_model.transcribe(
+                processor=self.processor,
+                audio_arrays=batch_chunks,
+                sample_rates=[SAMPLE_RATE] * len(batch_chunks),
+                language=self.language,
+            )
+
+            for idx, text in enumerate(batch_results):
+                segments.append(
+                    {
+                        "text": text.strip(),
+                        "start": round(batch_vad_segments[idx]["start"], 3),
+                        "end": round(batch_vad_segments[idx]["end"], 3),
+                    }
+                )
+                if pbar:
+                    pbar.update(1)
+
+        if pbar:
+            pbar.close()
+
+        return {"segments": segments, "language": self.language or "ja"}
+
+
+def _load_cohere_model(
+    model_name: str,
+    vad,
+    vad_params: dict,
+    device,
+    language: Optional[str],
+    dtype,
+    max_inference_batch_size: int,
+    **kwargs,
+):
+    """Load Cohere Transcribe model."""
+    if language is not None and language not in COHERE_SUPPORTED_LANGUAGES:
+        raise ValueError(
+            f"Language '{language}' is not supported by Cohere Transcribe. "
+            f"Supported: {sorted(COHERE_SUPPORTED_LANGUAGES)}"
+        )
+    if language is None:
+        warnings.warn(
+            "Cohere Transcribe does not support language auto-detection. "
+            "Defaulting to 'ja'. Set --language explicitly for other languages."
+        )
+        language = "ja"
+
+    # Map device
+    if isinstance(device, int):
+        device_map = f"cuda:{device}" if device >= 0 else "cpu"
+    elif device == "cuda":
+        device_map = "cuda:0"
+    else:
+        device_map = device
+
+    # Convert string dtype
+    if isinstance(dtype, str):
+        dtype_map = {
+            "bfloat16": torch.bfloat16,
+            "float16": torch.float16,
+            "float32": torch.float32,
+        }
+        dtype = dtype_map.get(dtype, torch.bfloat16)
+
+    print(f"Loading Cohere Transcribe model: {model_name}")
+    processor = AutoProcessor.from_pretrained(model_name, trust_remote_code=True)
+    model = AutoModelForSpeechSeq2Seq.from_pretrained(
+        model_name, trust_remote_code=True, dtype=dtype, device_map=device_map
+    )
+    model.eval()
+
+    return CohereASRPipeline(
+        processor=processor,
+        asr_model=model,
+        vad=vad,
+        vad_params=vad_params,
+        device=device,
+        language=language,
+        max_inference_batch_size=max_inference_batch_size,
+    )
+
+
 def load_model(
     model_name: str,
     device,
@@ -228,22 +391,28 @@ def load_model(
     **kwargs,
 ):
     """
-    Load Qwen3-ASR model for inference.
+    Load ASR model for inference.
+
+    Automatically detects the model type (Qwen3-ASR or Cohere Transcribe)
+    based on the model name and returns the appropriate pipeline.
 
     Args:
-        model_name: Name/path of the Qwen3-ASR model (e.g., "Qwen/Qwen3-ASR-1.7B")
+        model_name: Name/path of the ASR model
+            (e.g., "Qwen/Qwen3-ASR-1.7B" or "CohereLabs/cohere-transcribe-03-2026")
         device: Device for loading model ("cuda", "cpu", or device index)
         vad_model: Optional pre-loaded VAD model
         vad_options: Optional dict of VAD options (vad_onset, vad_offset)
         language: Optional language code (ISO 639-1, e.g., "en", "zh")
         forced_aligner: Optional Qwen3-ForcedAligner model name for word-level timestamps
-        max_inference_batch_size: Maximum batch size for Qwen3-ASR inference
+        max_inference_batch_size: Maximum batch size for inference
         dtype: Model precision (torch.bfloat16, torch.float16, or torch.float32)
-        **kwargs: Additional arguments passed to Qwen3ASRModel.from_pretrained()
+        **kwargs: Additional arguments passed to model loading
 
     Returns:
-        Qwen3ASRPipeline instance ready for transcription
+        ASR pipeline instance ready for transcription
     """
+    is_cohere = "cohere-transcribe" in model_name.lower()
+
     # Set up VAD options
     default_vad_options = {
         "vad_onset": 0.500,
@@ -269,7 +438,20 @@ def load_model(
             **default_vad_options,
         )
 
-    # Map device to device_map format expected by Qwen3-ASR
+    if is_cohere:
+        return _load_cohere_model(
+            model_name=model_name,
+            vad=vad,
+            vad_params=default_vad_options,
+            device=device,
+            language=language,
+            dtype=dtype,
+            max_inference_batch_size=max_inference_batch_size,
+            **kwargs,
+        )
+
+    # Qwen3-ASR path
+    # Map device to device_map format
     if isinstance(device, int):
         if device >= 0:
             device_map = f"cuda:{device}"
@@ -289,7 +471,6 @@ def load_model(
         }
         dtype = dtype_map.get(dtype, torch.bfloat16)
 
-    # Initialize Qwen3-ASR model
     print(f"Loading Qwen3-ASR model: {model_name}")
     asr_model = Qwen3ASRModel.from_pretrained(
         model_name,

@@ -1,7 +1,7 @@
-# WhisperX with Qwen3-ASR
+# WhisperX with Qwen3-ASR and Cohere Transcribe
 
 > [!NOTE]
-> This is a modified version of WhisperX that uses **Qwen3-ASR** instead of Whisper for automatic speech recognition. Qwen3-ASR is a state-of-the-art multilingual ASR model that supports 52 languages and provides excellent performance.
+> This is a modified version of WhisperX that supports **Qwen3-ASR** and **Cohere Transcribe** instead of Whisper for automatic speech recognition. Both are state-of-the-art multilingual ASR models. The model is selected via `--model`.
 
 <p align="center">
   <a href="https://github.com/m-bain/whisperX/blob/master/LICENSE">
@@ -10,7 +10,7 @@
   </a>
 </p>
 
-This repository provides fast automatic speech recognition with word-level timestamps and speaker diarization, now powered by Qwen3-ASR.
+This repository provides fast automatic speech recognition with word-level timestamps and speaker diarization.
 
 ## Key Features
 
@@ -18,20 +18,30 @@ This repository provides fast automatic speech recognition with word-level times
 - 👯‍♂️ **Multispeaker ASR** using speaker diarization from [pyannote-audio](https://github.com/pyannote/pyannote-audio)
 - 🗣️ **VAD preprocessing**, reduces hallucination & improves transcription quality
 - ⚡️ **Efficient batch processing** for fast transcription
-- 🌍 **52 languages supported** including English, Chinese, Japanese, Korean, and more
+- 🌍 **52 languages supported** (Qwen3-ASR) / **14 languages** (Cohere Transcribe)
 - 🤗 **Direct integration** with Hugging Face models
 
-## What is Qwen3-ASR?
+## Supported ASR Models
 
-**Qwen3-ASR** is an advanced automatic speech recognition model developed by Alibaba's Qwen team. It offers:
+### Qwen3-ASR
+
+**Qwen3-ASR** is an advanced ASR model developed by Alibaba's Qwen team. It offers:
 - Support for 52 languages with high accuracy
+- Language auto-detection
 - Efficient inference with batch processing
 - Word-level timestamps via Qwen3-ForcedAligner (11 languages)
-- Better handling of accents and diverse audio conditions
+
+### Cohere Transcribe
+
+**Cohere Transcribe** (`cohere-transcribe-03-2026`) is a 2B-parameter Conformer-based ASR model by Cohere. It offers:
+- 14 languages: en, de, fr, it, es, pt, el, nl, pl, zh, ja, ko, vi, ar
+- #1 accuracy on the Open ASR Leaderboard (5.42% average WER)
+- Requires language to be specified explicitly (no auto-detection)
+- Requires accepting the [model license](https://huggingface.co/CohereLabs/cohere-transcribe-03-2026) on Hugging Face
 
 **Voice Activity Detection (VAD)** detects the presence or absence of human speech, reducing hallucinations.
 
-**Forced Alignment** (via Qwen3-ForcedAligner) aligns transcriptions to audio to generate word-level timestamps.
+**Forced Alignment** (via Qwen3-ForcedAligner) aligns transcriptions to audio to generate word-level timestamps. Works with both ASR models.
 
 **Speaker Diarization** partitions audio into segments by speaker identity.
 
@@ -41,7 +51,7 @@ Tested with Python 3.10 and PyTorch 2.
 
 This project uses [uv](https://docs.astral.sh/uv/) for dependency management. Make sure you have uv installed.
 
-### Install WhisperX with Qwen3-ASR
+### Install WhisperX
 
 For regular installation:
 ```bash
@@ -75,19 +85,20 @@ To **enable Speaker Diarization**, include your Hugging Face access token (read)
 
 ### Command Line
 
-Basic transcription:
+Basic transcription with Qwen3-ASR:
 ```bash
 whisperx audio.wav --model Qwen/Qwen3-ASR-1.7B
 ```
 
-With language specification:
+Basic transcription with Cohere Transcribe:
 ```bash
-whisperx audio.wav --model Qwen/Qwen3-ASR-1.7B --language en
+whisperx audio.wav --model CohereLabs/cohere-transcribe-03-2026 --language en
 ```
 
-With word-level alignment:
+With word-level alignment (works with both models):
 ```bash
 whisperx audio.wav --model Qwen/Qwen3-ASR-1.7B --forced_aligner Qwen/Qwen3-ForcedAligner-0.6B
+whisperx audio.wav --model CohereLabs/cohere-transcribe-03-2026 --language ja --forced_aligner Qwen/Qwen3-ForcedAligner-0.6B
 ```
 
 With speaker diarization:
@@ -165,19 +176,22 @@ print(result["segments"])  # segments with speaker IDs
 ### Available Models
 
 **ASR Models:**
-- `Qwen/Qwen3-ASR-1.7B` - Full-sized model (recommended for accuracy)
-- `Qwen/Qwen3-ASR-0.6B` - Smaller model (faster, slightly lower accuracy)
+- `Qwen/Qwen3-ASR-1.7B` - Full-sized Qwen3 model (recommended for accuracy, 52 languages)
+- `Qwen/Qwen3-ASR-0.6B` - Smaller Qwen3 model (faster, slightly lower accuracy)
+- `CohereLabs/cohere-transcribe-03-2026` - Cohere Transcribe (14 languages, requires HF login and license acceptance)
 
 **Aligner Models:**
-- `Qwen/Qwen3-ForcedAligner-0.6B` - Word-level timestamps (supports 11 languages)
+- `Qwen/Qwen3-ForcedAligner-0.6B` - Word-level timestamps (supports 11 languages, works with both ASR models)
 
 ### Supported Languages
 
-Qwen3-ASR supports 52 languages:
+**Qwen3-ASR** supports 52 languages:
 
 **Major Languages:** English (en), Chinese (zh), German (de), Spanish (es), Russian (ru), Korean (ko), French (fr), Japanese (ja), Portuguese (pt), Turkish (tr), Arabic (ar), Italian (it), Dutch (nl), Polish (pl), Czech (cs), Hindi (hi), Persian (fa), Ukrainian (uk), Vietnamese (vi)
 
 **Additional Languages:** Romanian (ro), Thai (th), Greek (el), Hungarian (hu), Danish (da), Finnish (fi), Norwegian (no), Swedish (sv), Hebrew (he), Indonesian (id), Malay (ms), Catalan (ca), Serbian (sr), Croatian (hr), Bulgarian (bg), Slovak (sk), Lithuanian (lt), Latvian (lv), Estonian (et), Slovenian (sl), Bengali (bn), Tamil (ta), Telugu (te), Marathi (mr), Urdu (ur), Kannada (kn), Malayalam (ml), Gujarati (gu), Punjabi (pa), Sinhala (si), Khmer (km), Lao (lo)
+
+**Cohere Transcribe** supports 14 languages: en, de, fr, it, es, pt, el, nl, pl, zh, ja, ko, vi, ar. Language must be specified explicitly.
 
 **Qwen3-ForcedAligner** supports 11 languages: en, zh, de, es, fr, ja, ko, pt, ru, tr, ar
 
@@ -305,6 +319,7 @@ result = model.transcribe("audio.wav")
 
 - Original WhisperX: [m-bain/whisperX](https://github.com/m-bain/whisperX)
 - Qwen3-ASR: [Alibaba Qwen Team](https://huggingface.co/Qwen)
+- Cohere Transcribe: [CohereLabs](https://huggingface.co/CohereLabs/cohere-transcribe-03-2026)
 - OpenAI Whisper: [openai/whisper](https://github.com/openai/whisper)
 - pyannote.audio: [pyannote/pyannote-audio](https://github.com/pyannote/pyannote-audio)
 
