@@ -1,8 +1,14 @@
 from typing import List, Union, Optional
+import logging
 import warnings
 
-# Suppress HF transformers warning about pad_token_id
-warnings.filterwarnings("ignore", message="Setting `pad_token_id` to `eos_token_id`")
+# Suppress HF transformers logging warning about pad_token_id.
+# Must target the specific child logger — parent logger filters are skipped during propagation.
+logging.getLogger("transformers.generation.utils").addFilter(
+    type("_PadTokenFilter", (logging.Filter,), {
+        "filter": lambda self, r: "Setting `pad_token_id` to `eos_token_id`" not in r.getMessage()
+    })()
+)
 
 import numpy as np
 import torch
