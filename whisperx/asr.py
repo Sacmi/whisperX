@@ -1,6 +1,9 @@
 from typing import List, Union, Optional
 import warnings
 
+# Suppress HF transformers warning about pad_token_id
+warnings.filterwarnings("ignore", message="Setting `pad_token_id` to `eos_token_id`")
+
 import numpy as np
 import torch
 from tqdm import tqdm
@@ -117,7 +120,10 @@ class Qwen3ASRPipeline:
 
         # Apply VAD segmentation
         vad_segments = self.vad_model(
-            {"waveform": torch.from_numpy(audio).unsqueeze(0), "sample_rate": SAMPLE_RATE}
+            {
+                "waveform": torch.from_numpy(audio).unsqueeze(0),
+                "sample_rate": SAMPLE_RATE,
+            }
         )
         vad_segments = merge_chunks(
             vad_segments,
@@ -207,10 +213,7 @@ class Qwen3ASRPipeline:
         if pbar:
             pbar.close()
 
-        return {
-            "segments": segments,
-            "language": detected_language or "en"
-        }
+        return {"segments": segments, "language": detected_language or "en"}
 
 
 def load_model(
@@ -222,7 +225,7 @@ def load_model(
     forced_aligner: Optional[str] = None,
     max_inference_batch_size: int = 32,
     dtype=torch.bfloat16,
-    **kwargs
+    **kwargs,
 ):
     """
     Load Qwen3-ASR model for inference.
@@ -255,9 +258,15 @@ def load_model(
         vad = vad_model
     else:
         vad = load_vad_model(
-            torch.device(device if isinstance(device, str) else f"cuda:{device}" if device >= 0 else "cpu"),
+            torch.device(
+                device
+                if isinstance(device, str)
+                else f"cuda:{device}"
+                if device >= 0
+                else "cpu"
+            ),
             token=None,
-            **default_vad_options
+            **default_vad_options,
         )
 
     # Map device to device_map format expected by Qwen3-ASR
@@ -287,7 +296,7 @@ def load_model(
         dtype=dtype,
         device_map=device_map,
         max_inference_batch_size=max_inference_batch_size,
-        **kwargs
+        **kwargs,
     )
 
     # Warn about removed parameters if present in kwargs
