@@ -112,7 +112,7 @@ whisperx audio.wav \
   --model Qwen/Qwen3-ASR-1.7B \
   --language en \
   --forced_aligner Qwen/Qwen3-ForcedAligner-0.6B \
-  --max_inference_batch_size 32 \
+  --batch_size 32 \
   --dtype bfloat16 \
   --output_format json \
   --diarize \
@@ -155,7 +155,6 @@ model = whisperx.load_model(
     "Qwen/Qwen3-ASR-1.7B",
     device=device,
     language="en",  # Optional: specify language
-    max_inference_batch_size=32,
     dtype="bfloat16"
 )
 
@@ -269,8 +268,11 @@ model_a, metadata = whisperx.load_align_model(
 
 New parameters added for Qwen3-ASR:
 - `forced_aligner` - Specify aligner model
-- `max_inference_batch_size` - Control batch size (default: 32)
 - `dtype` - Model precision: "bfloat16" (recommended), "float16", or "float32"
+
+Use `batch_size` in `transcribe()` or `--batch_size` on the command line to
+limit the number of segments in each inference batch. The default is 8.
+`max_inference_batch_size` is accepted as a deprecated compatibility alias.
 
 ## Migration Guide
 
@@ -302,10 +304,9 @@ model = whisperx.load_model(
     device="cuda",
     # task parameter removed
     language="en",  # Optional: specify language
-    max_inference_batch_size=32,  # New: control batch size
     dtype="bfloat16"  # New: control precision
 )
-result = model.transcribe("audio.wav")
+result = model.transcribe("audio.wav", batch_size=16)
 ```
 
 ## Advantages of Qwen3-ASR
@@ -330,8 +331,8 @@ result = model.transcribe("audio.wav")
 
 1. **Use bfloat16 precision** for best balance of speed and accuracy
 2. **Adjust batch size** based on your GPU memory:
-   - 8GB VRAM: `max_inference_batch_size=16`
-   - 16GB+ VRAM: `max_inference_batch_size=32` or higher
+   - 8GB VRAM: `--batch_size 16`
+   - 16GB+ VRAM: `--batch_size 32` or higher
 3. **Specify language** when known to improve accuracy and speed
 4. **Use VAD parameters** (`--vad_onset`, `--vad_offset`) to tune speech detection
 

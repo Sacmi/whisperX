@@ -97,6 +97,7 @@ class Qwen3ASRPipeline:
         device: Union[int, str, "torch.device"],
         language: Optional[str] = None,
         forced_aligner: Optional[str] = None,
+        default_batch_size: int = 8,
     ):
         self.asr_model = asr_model
         self.vad_model = vad
@@ -104,6 +105,7 @@ class Qwen3ASRPipeline:
         self.device = device
         self.language = language
         self.forced_aligner = forced_aligner
+        self.default_batch_size = default_batch_size
 
     def transcribe(
         self,
@@ -119,7 +121,7 @@ class Qwen3ASRPipeline:
 
         Args:
             audio: Audio file path or numpy array
-            batch_size: Batch size for inference (not used, controlled by model)
+            batch_size: Maximum number of segments in a Qwen inference batch
             chunk_size: Maximum chunk size for VAD merging
             print_progress: Whether to print progress
             combined_progress: Whether this is part of a combined progress (affects percentage)
@@ -128,6 +130,12 @@ class Qwen3ASRPipeline:
         Returns:
             TranscriptionResult with segments and detected language
         """
+        process_batch_size = (
+            self.default_batch_size if batch_size is None else batch_size
+        )
+        if process_batch_size < 1:
+            raise ValueError("batch_size must be a positive integer")
+
         # Load audio if string path provided
         if isinstance(audio, str):
             audio = load_audio(audio)
@@ -182,15 +190,8 @@ class Qwen3ASRPipeline:
                     f"Falling back to auto-detection."
                 )
 
-        # Transcribe segments in smaller batches to avoid OOM
-        # The batch_size parameter is not used by Qwen3-ASR directly,
-        # but we use it to control how many segments we process at once
         segments: List[SingleSegment] = []
         detected_language = self.language  # Default to specified language
-
-        # Process in batches to avoid memory issues
-        # Use a reasonable batch size (default to 8 segments at a time)
-        process_batch_size = min(batch_size or 8, 8)
 
         # Create progress bar
         pbar = None
@@ -198,45 +199,37 @@ class Qwen3ASRPipeline:
             pbar_desc = "Transcribing (50%)" if combined_progress else "Transcribing"
             pbar = tqdm(total=total_segments, desc=pbar_desc, unit="segment")
 
-        for batch_start in range(0, total_segments, process_batch_size):
-            batch_end = min(batch_start + process_batch_size, total_segments)
-            batch_chunks = audio_chunks[batch_start:batch_end]
-            batch_vad_segments = vad_segments[batch_start:batch_end]
+        # qwen-asr owns inference chunking; submitting all segments here avoids
+        # a second, conflicting batching layer in WhisperX.
+        self.asr_model.max_inference_batch_size = process_batch_size
+        batch_results = self.asr_model.transcribe(
+            audio=audio_chunks,
+            language=qwen_language,
+        )
 
-            # Transcribe this batch
-            batch_results = self.asr_model.transcribe(
-                audio=batch_chunks,
-                language=qwen_language,
+        for idx, result in enumerate(batch_results):
+            text = result.text.strip()
+
+            if result.language:
+                detected_language = QWEN_TO_WHISPERX_LANGUAGE.get(
+                    result.language, detected_language or "en"
+                )
+
+            segments.append(
+                {
+                    "text": text,
+                    "start": round(vad_segments[idx]["start"], 3),
+                    "end": round(vad_segments[idx]["end"], 3),
+                }
             )
 
-            # Format results for this batch
-            for idx, result in enumerate(batch_results):
-                # Extract text and language from result
-                text = result.text.strip()
+            if pbar:
+                pbar.update(1)
 
-                # Map detected language back to ISO code
-                if result.language:
-                    detected_language = QWEN_TO_WHISPERX_LANGUAGE.get(
-                        result.language, detected_language or "en"
-                    )
-
-                # Create segment with timestamps from VAD
-                segments.append(
-                    {
-                        "text": text,
-                        "start": round(batch_vad_segments[idx]["start"], 3),
-                        "end": round(batch_vad_segments[idx]["end"], 3),
-                    }
-                )
-
-                # Update progress bar
-                if pbar:
-                    pbar.update(1)
-
-            if progress_callback:
-                progress_callback(
-                    "progress", "transcribe", done=batch_end, total=total_segments
-                )
+        if progress_callback:
+            progress_callback(
+                "progress", "transcribe", done=total_segments, total=total_segments
+            )
 
         # Close progress bar
         if pbar:
@@ -260,7 +253,7 @@ class CohereASRPipeline:
         vad_params: dict,
         device: Union[int, str, "torch.device"],
         language: Optional[str] = None,
-        max_inference_batch_size: int = 32,
+        default_batch_size: int = 8,
     ):
         self.processor = processor
         self.asr_model = asr_model
@@ -268,7 +261,7 @@ class CohereASRPipeline:
         self.vad_params = vad_params
         self.device = device
         self.language = language
-        self.max_inference_batch_size = max_inference_batch_size
+        self.default_batch_size = default_batch_size
 
     def transcribe(
         self,
@@ -282,6 +275,12 @@ class CohereASRPipeline:
         """
         Transcribe audio using Cohere Transcribe with VAD segmentation.
         """
+        process_batch_size = (
+            self.default_batch_size if batch_size is None else batch_size
+        )
+        if process_batch_size < 1:
+            raise ValueError("batch_size must be a positive integer")
+
         if isinstance(audio, str):
             audio = load_audio(audio)
 
@@ -321,8 +320,6 @@ class CohereASRPipeline:
             return {"segments": [], "language": self.language or "ja"}
 
         segments: List[SingleSegment] = []
-        process_batch_size = min(batch_size or 8, self.max_inference_batch_size)
-
         pbar = None
         if print_progress:
             pbar_desc = "Transcribing (50%)" if combined_progress else "Transcribing"
@@ -371,7 +368,7 @@ def _load_cohere_model(
     device,
     language: Optional[str],
     dtype,
-    max_inference_batch_size: int,
+    default_batch_size: int,
     **kwargs,
 ):
     """Load Cohere Transcribe model."""
@@ -418,7 +415,7 @@ def _load_cohere_model(
         vad_params=vad_params,
         device=device,
         language=language,
-        max_inference_batch_size=max_inference_batch_size,
+        default_batch_size=default_batch_size,
     )
 
 
@@ -429,7 +426,7 @@ def load_model(
     vad_options=None,
     language: Optional[str] = None,
     forced_aligner: Optional[str] = None,
-    max_inference_batch_size: int = 32,
+    max_inference_batch_size: Optional[int] = None,
     dtype=torch.bfloat16,
     **kwargs,
 ):
@@ -447,7 +444,7 @@ def load_model(
         vad_options: Optional dict of VAD options (vad_onset, vad_offset)
         language: Optional language code (ISO 639-1, e.g., "en", "zh")
         forced_aligner: Optional Qwen3-ForcedAligner model name for word-level timestamps
-        max_inference_batch_size: Maximum batch size for inference
+        max_inference_batch_size: Deprecated default batch size alias
         dtype: Model precision (torch.bfloat16, torch.float16, or torch.float32)
         **kwargs: Additional arguments passed to model loading
 
@@ -455,6 +452,18 @@ def load_model(
         ASR pipeline instance ready for transcription
     """
     is_cohere = "cohere-transcribe" in model_name.lower()
+
+    default_batch_size = 8
+    if max_inference_batch_size is not None:
+        if max_inference_batch_size < 1:
+            raise ValueError("max_inference_batch_size must be a positive integer")
+        warnings.warn(
+            "max_inference_batch_size is deprecated; pass batch_size to "
+            "transcribe() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        default_batch_size = max_inference_batch_size
 
     # Set up VAD options
     default_vad_options = {
@@ -489,7 +498,7 @@ def load_model(
             device=device,
             language=language,
             dtype=dtype,
-            max_inference_batch_size=max_inference_batch_size,
+            default_batch_size=default_batch_size,
             **kwargs,
         )
 
@@ -519,7 +528,7 @@ def load_model(
         model_name,
         dtype=dtype,
         device_map=device_map,
-        max_inference_batch_size=max_inference_batch_size,
+        max_inference_batch_size=default_batch_size,
         **kwargs,
     )
 
@@ -541,4 +550,5 @@ def load_model(
         device=device,
         language=language,
         forced_aligner=forced_aligner,
+        default_batch_size=default_batch_size,
     )

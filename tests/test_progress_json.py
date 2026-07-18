@@ -283,13 +283,18 @@ def test_qwen_pipeline_reports_batch_progress(monkeypatch):
     monkeypatch.setattr(asr_module, "merge_chunks", lambda *args, **kwargs: vad_segments)
 
     class FakeModel:
+        def __init__(self):
+            self.calls = []
+
         def transcribe(self, audio, language):
+            self.calls.append(len(audio))
             return [
                 SimpleNamespace(text="text", language="English") for _ in audio
             ]
 
+    fake_model = FakeModel()
     pipeline = asr_module.Qwen3ASRPipeline(
-        FakeModel(), lambda audio: object(), {}, "cpu", language="en"
+        fake_model, lambda audio: object(), {}, "cpu", language="en"
     )
     events = []
 
@@ -303,11 +308,12 @@ def test_qwen_pipeline_reports_batch_progress(monkeypatch):
     )
 
     assert len(result["segments"]) == 3
+    assert fake_model.calls == [3]
+    assert fake_model.max_inference_batch_size == 2
     assert events == [
         {"event": "stage_start", "stage": "vad"},
         {"event": "stage_end", "stage": "vad"},
         {"event": "stage_start", "stage": "transcribe"},
-        {"event": "progress", "stage": "transcribe", "done": 2, "total": 3},
         {"event": "progress", "stage": "transcribe", "done": 3, "total": 3},
         {"event": "stage_end", "stage": "transcribe"},
     ]

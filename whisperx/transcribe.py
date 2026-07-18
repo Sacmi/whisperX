@@ -29,7 +29,7 @@ def cli():
     parser.add_argument("audio", nargs="+", type=str, help="audio file(s) to transcribe")
     parser.add_argument("--model", default="Qwen/Qwen3-ASR-1.7B", help="name of the ASR model (e.g., Qwen/Qwen3-ASR-1.7B or CohereLabs/cohere-transcribe-03-2026)")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu", help="device to use for PyTorch inference")
-    parser.add_argument("--batch_size", default=8, type=int, help="the preferred batch size for inference")
+    parser.add_argument("--batch_size", default=argparse.SUPPRESS, type=int, help="maximum number of segments per inference batch (default: 8)")
 
     parser.add_argument("--output_dir", "-o", type=str, default=".", help="directory to save the outputs")
     parser.add_argument("--output_format", "-f", type=str, default="all", choices=["all", "srt", "vtt", "txt", "tsv", "json", "aud"], help="format of the output file; if not specified, all available formats will be produced")
@@ -38,9 +38,9 @@ def cli():
     parser.add_argument("--task", type=str, default="transcribe", choices=["transcribe", "translate"], help="[DEPRECATED] Qwen3-ASR only supports transcription. Translation is not available.")
     parser.add_argument("--language", type=str, default=None, choices=sorted(LANGUAGES.keys()) + sorted([k.title() for k in TO_LANGUAGE_CODE.keys()]), help="language spoken in the audio, specify None to perform language detection")
 
-    # Qwen3-ASR specific params
+    # ASR model params
     parser.add_argument("--forced_aligner", type=str, default=None, help="Qwen3-ForcedAligner model for word-level timestamps (e.g., 'Qwen/Qwen3-ForcedAligner-0.6B')")
-    parser.add_argument("--max_inference_batch_size", type=int, default=32, help="Maximum batch size for Qwen3-ASR inference")
+    parser.add_argument("--max_inference_batch_size", type=int, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     parser.add_argument("--dtype", type=str, default="bfloat16", choices=["bfloat16", "float16", "float32"], help="Model precision (bfloat16 recommended for Qwen3-ASR)")
 
     # alignment params
@@ -122,15 +122,31 @@ def _progress_output():
 
 def _run(args, parser, progress_emitter):
     model_name: str = args.pop("model")
-    batch_size: int = args.pop("batch_size")
+    batch_size: int = args.pop("batch_size", None)
     output_dir: str = args.pop("output_dir")
     output_format: str = args.pop("output_format")
     device: str = args.pop("device")
 
-    # Qwen3-ASR specific params
+    # ASR model params
     forced_aligner: str = args.pop("forced_aligner")
-    max_inference_batch_size: int = args.pop("max_inference_batch_size")
+    max_inference_batch_size: int = args.pop("max_inference_batch_size", None)
     dtype: str = args.pop("dtype")
+
+    if batch_size is not None and max_inference_batch_size is not None:
+        parser.error(
+            "--batch_size and deprecated --max_inference_batch_size cannot be used together"
+        )
+    if max_inference_batch_size is not None:
+        warnings.warn(
+            "--max_inference_batch_size is deprecated; use --batch_size instead.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        batch_size = max_inference_batch_size
+    if batch_size is None:
+        batch_size = 8
+    if batch_size < 1:
+        parser.error("--batch_size must be a positive integer")
 
     # model_flush: bool = args.pop("model_flush")
     os.makedirs(output_dir, exist_ok=True)
@@ -212,7 +228,6 @@ def _run(args, parser, progress_emitter):
         device=device,
         language=args["language"],
         forced_aligner=forced_aligner,
-        max_inference_batch_size=max_inference_batch_size,
         dtype=dtype,
         vad_options={"vad_onset": vad_onset, "vad_offset": vad_offset},
     )
