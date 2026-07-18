@@ -74,6 +74,7 @@ def test_cli_progress_json_routes_human_output_and_reports_all_stages(
     aligned_audio = []
     written = []
     diarized = []
+    diarization_configs = []
     cleanup = []
 
     class FakeASR:
@@ -115,8 +116,9 @@ def test_cli_progress_json_routes_human_output_and_reports_all_stages(
         return {"segments": segments, "word_segments": []}
 
     class FakeDiarizationPipeline:
-        def __init__(self, token, device):
+        def __init__(self, model_name, token, device):
             print("loading fake diarizer")
+            diarization_configs.append((model_name, token, device))
 
         def __call__(self, audio_path, **kwargs):
             print(f"fake diarize: {audio_path}")
@@ -169,6 +171,8 @@ def test_cli_progress_json_routes_human_output_and_reports_all_stages(
             "--print_progress",
             "true",
             "--diarize",
+            "--diarize_model",
+            "custom/diarization-model",
             "--hf_token",
             "token",
         ],
@@ -221,6 +225,7 @@ def test_cli_progress_json_routes_human_output_and_reports_all_stages(
     assert loaded_audio == audio_paths
     assert aligned_audio == audio_paths
     assert diarized == audio_paths
+    assert diarization_configs == [("custom/diarization-model", "token", "cpu")]
     assert written == audio_paths
     assert cleanup == ["gc", "cuda", "gc", "cuda"]
 
@@ -345,3 +350,12 @@ def test_empty_alignment_reports_zero_progress():
 @pytest.mark.parametrize(("value", "expected"), [("true", True), ("false", False)])
 def test_str2bool_accepts_lowercase(value, expected):
     assert str2bool(value) is expected
+
+
+def test_cli_help_lists_diarization_model(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["whisperx", "--help"])
+
+    with pytest.raises(SystemExit, match="0"):
+        transcribe_module.cli()
+
+    assert "--diarize_model" in capsys.readouterr().out

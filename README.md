@@ -103,7 +103,7 @@ whisperx audio.wav --model CohereLabs/cohere-transcribe-03-2026 --language ja --
 
 With speaker diarization:
 ```bash
-whisperx audio.wav --model Qwen/Qwen3-ASR-1.7B --diarize --hf_token YOUR_TOKEN
+whisperx audio.wav --model Qwen/Qwen3-ASR-1.7B --diarize --diarize_model pyannote/speaker-diarization-community-1 --hf_token YOUR_TOKEN
 ```
 
 Full example with all features:
