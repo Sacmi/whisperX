@@ -16,7 +16,7 @@ class DiarizationPipeline:
     ):
         if isinstance(device, str):
             device = torch.device(device)
-        model_config = model_name or "pyannote/speaker-diarization-3.1"
+        model_config = model_name or "pyannote/speaker-diarization-community-1"
         self.model = Pipeline.from_pretrained(model_config, token=token).to(device)
 
     def __call__(

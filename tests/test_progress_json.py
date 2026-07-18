@@ -352,10 +352,12 @@ def test_str2bool_accepts_lowercase(value, expected):
     assert str2bool(value) is expected
 
 
-def test_cli_help_lists_diarization_model(monkeypatch, capsys):
+def test_cli_help_lists_community_diarization_model(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["whisperx", "--help"])
 
     with pytest.raises(SystemExit, match="0"):
         transcribe_module.cli()
 
-    assert "--diarize_model" in capsys.readouterr().out
+    help_text = capsys.readouterr().out
+    assert "--diarize_model" in help_text
+    assert "pyannote/speaker-diarization-community-1" in help_text

@@ -77,9 +77,7 @@ You may also need to install ffmpeg. Follow instructions from [OpenAI Whisper se
 
 ### 3. Speaker Diarization (Optional)
 
-To **enable Speaker Diarization**, include your Hugging Face access token (read) that you can generate from [here](https://huggingface.co/settings/tokens) after the `--hf_token` argument. Accept the user agreements for:
-- [Segmentation](https://huggingface.co/pyannote/segmentation-3.0)
-- [Speaker-Diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
+To **enable Speaker Diarization**, include your Hugging Face access token (read) that you can generate from [here](https://huggingface.co/settings/tokens) after the `--hf_token` argument. Accept the user agreement for [speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1).
 
 ## Usage 💬
 
@@ -342,7 +340,7 @@ result = model.transcribe("audio.wav", batch_size=16)
 - Qwen3-ASR: [Alibaba Qwen Team](https://huggingface.co/Qwen)
 - Cohere Transcribe: [CohereLabs](https://huggingface.co/CohereLabs/cohere-transcribe-03-2026)
 - OpenAI Whisper: [openai/whisper](https://github.com/openai/whisper)
-- pyannote.audio: [pyannote/pyannote-audio](https://github.com/pyannote/pyannote-audio)
+- pyannote.audio: [pyannote/pyannote-audio](https://github.com/pyannote/pyannote-audio); diarization uses [speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1), licensed under [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/) by [pyannoteAI](https://www.pyannote.ai)
 
 ## License
 
