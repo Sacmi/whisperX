@@ -1,4 +1,4 @@
-from typing import List, Union, Optional
+from typing import Callable, List, Union, Optional
 import logging
 import warnings
 
@@ -112,6 +112,7 @@ class Qwen3ASRPipeline:
         chunk_size=30,
         print_progress=False,
         combined_progress=False,
+        progress_callback: Optional[Callable[..., None]] = None,
     ) -> TranscriptionResult:
         """
         Transcribe audio using Qwen3-ASR with VAD segmentation.
@@ -122,6 +123,7 @@ class Qwen3ASRPipeline:
             chunk_size: Maximum chunk size for VAD merging
             print_progress: Whether to print progress
             combined_progress: Whether this is part of a combined progress (affects percentage)
+            progress_callback: Optional machine-readable progress callback
 
         Returns:
             TranscriptionResult with segments and detected language
@@ -131,6 +133,8 @@ class Qwen3ASRPipeline:
             audio = load_audio(audio)
 
         # Apply VAD segmentation
+        if progress_callback:
+            progress_callback("stage_start", "vad")
         vad_segments = self.vad_model(
             {
                 "waveform": torch.from_numpy(audio).unsqueeze(0),
@@ -143,6 +147,8 @@ class Qwen3ASRPipeline:
             onset=self.vad_params.get("vad_onset", 0.500),
             offset=self.vad_params.get("vad_offset", 0.363),
         )
+        if progress_callback:
+            progress_callback("stage_end", "vad")
 
         # Extract audio chunks for each VAD segment
         # Qwen3-ASR expects tuples of (audio_array, sample_rate)
@@ -154,8 +160,15 @@ class Qwen3ASRPipeline:
             # Pass as tuple (audio, sample_rate) for Qwen3-ASR
             audio_chunks.append((chunk, SAMPLE_RATE))
 
+        total_segments = len(audio_chunks)
+        if progress_callback:
+            progress_callback("stage_start", "transcribe")
+
         # Handle empty segments
-        if len(audio_chunks) == 0:
+        if total_segments == 0:
+            if progress_callback:
+                progress_callback("progress", "transcribe", done=0, total=0)
+                progress_callback("stage_end", "transcribe")
             return {"segments": [], "language": self.language or "en"}
 
         # Map language to Qwen format
@@ -172,7 +185,6 @@ class Qwen3ASRPipeline:
         # Transcribe segments in smaller batches to avoid OOM
         # The batch_size parameter is not used by Qwen3-ASR directly,
         # but we use it to control how many segments we process at once
-        total_segments = len(audio_chunks)
         segments: List[SingleSegment] = []
         detected_language = self.language  # Default to specified language
 
@@ -221,9 +233,16 @@ class Qwen3ASRPipeline:
                 if pbar:
                     pbar.update(1)
 
+            if progress_callback:
+                progress_callback(
+                    "progress", "transcribe", done=batch_end, total=total_segments
+                )
+
         # Close progress bar
         if pbar:
             pbar.close()
+        if progress_callback:
+            progress_callback("stage_end", "transcribe")
 
         return {"segments": segments, "language": detected_language or "en"}
 
@@ -258,6 +277,7 @@ class CohereASRPipeline:
         chunk_size=30,
         print_progress=False,
         combined_progress=False,
+        progress_callback: Optional[Callable[..., None]] = None,
     ) -> TranscriptionResult:
         """
         Transcribe audio using Cohere Transcribe with VAD segmentation.
@@ -266,6 +286,8 @@ class CohereASRPipeline:
             audio = load_audio(audio)
 
         # Apply VAD segmentation
+        if progress_callback:
+            progress_callback("stage_start", "vad")
         vad_segments = self.vad_model(
             {
                 "waveform": torch.from_numpy(audio).unsqueeze(0),
@@ -278,6 +300,8 @@ class CohereASRPipeline:
             onset=self.vad_params.get("vad_onset", 0.500),
             offset=self.vad_params.get("vad_offset", 0.363),
         )
+        if progress_callback:
+            progress_callback("stage_end", "vad")
 
         # Extract audio chunks as numpy arrays
         audio_chunks = []
@@ -286,10 +310,16 @@ class CohereASRPipeline:
             f2 = int(seg["end"] * SAMPLE_RATE)
             audio_chunks.append(audio[f1:f2])
 
-        if len(audio_chunks) == 0:
+        total_segments = len(audio_chunks)
+        if progress_callback:
+            progress_callback("stage_start", "transcribe")
+
+        if total_segments == 0:
+            if progress_callback:
+                progress_callback("progress", "transcribe", done=0, total=0)
+                progress_callback("stage_end", "transcribe")
             return {"segments": [], "language": self.language or "ja"}
 
-        total_segments = len(audio_chunks)
         segments: List[SingleSegment] = []
         process_batch_size = min(batch_size or 8, self.max_inference_batch_size)
 
@@ -321,8 +351,15 @@ class CohereASRPipeline:
                 if pbar:
                     pbar.update(1)
 
+            if progress_callback:
+                progress_callback(
+                    "progress", "transcribe", done=batch_end, total=total_segments
+                )
+
         if pbar:
             pbar.close()
+        if progress_callback:
+            progress_callback("stage_end", "transcribe")
 
         return {"segments": segments, "language": self.language or "ja"}
 

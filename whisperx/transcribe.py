@@ -1,7 +1,10 @@
 import argparse
 import gc
 import os
+import sys
 import warnings
+from contextlib import contextmanager, redirect_stdout
+from functools import partial
 
 import torch
 
@@ -11,6 +14,7 @@ from .audio import load_audio
 from .diarize import DiarizationPipeline, assign_word_speakers
 from .utils import (
     LANGUAGES,
+    ProgressEmitter,
     TO_LANGUAGE_CODE,
     get_writer,
     optional_float,
@@ -69,12 +73,54 @@ def cli():
     parser.add_argument("--hf_token", type=str, default=None, help="Hugging Face Access Token to access PyAnnote gated models")
 
     parser.add_argument("--print_progress", type=str2bool, default = False, help = "if True, progress will be printed in transcribe() and align() methods.")
+    parser.add_argument("--progress_json", type=str2bool, default=False, help="emit machine-readable progress as JSONL to stdout")
 
     parser.add_argument("--no_repeat_ngram_size", type=optional_int, default=None)
     parser.add_argument("--repetition_penalty", type=optional_float, default=None)
     # fmt: on
 
     args = parser.parse_args().__dict__
+    progress_json: bool = args.pop("progress_json")
+
+    if progress_json:
+        with _progress_output() as progress_emitter:
+            return _run(args, parser, progress_emitter)
+    return _run(args, parser, None)
+
+
+@contextmanager
+def _progress_output():
+    original_stdout = sys.stdout
+    try:
+        stdout_fd = original_stdout.fileno()
+        stderr_fd = sys.stderr.fileno()
+    except (AttributeError, OSError, ValueError):
+        with redirect_stdout(sys.stderr):
+            yield ProgressEmitter(original_stdout)
+        return
+
+    original_stdout.flush()
+    sys.stderr.flush()
+    saved_stdout_fd = os.dup(1)
+    progress_stream = os.fdopen(
+        os.dup(stdout_fd),
+        "w",
+        buffering=1,
+        encoding=getattr(original_stdout, "encoding", None) or "utf-8",
+    )
+    os.dup2(stderr_fd, 1)
+    try:
+        with redirect_stdout(sys.stderr):
+            yield ProgressEmitter(progress_stream)
+    finally:
+        try:
+            progress_stream.close()
+        finally:
+            os.dup2(saved_stdout_fd, 1)
+            os.close(saved_stdout_fd)
+
+
+def _run(args, parser, progress_emitter):
     model_name: str = args.pop("model")
     batch_size: int = args.pop("batch_size")
     output_dir: str = args.pop("output_dir")
@@ -146,10 +192,21 @@ def cli():
         warnings.warn("--max_line_count has no effect without --max_line_width")
     writer_args = {arg: args.pop(arg) for arg in word_options}
 
+    audio_paths = args.pop("audio")
+    multiple_files = len(audio_paths) > 1
+
+    def progress_callback(audio_path):
+        if progress_emitter is None:
+            return None
+        event_file = audio_path if multiple_files else None
+        return partial(progress_emitter, file=event_file)
+
     # Part 1: VAD & ASR Loop
     results = []
     tmp_results = []
     # model = load_model(model_name, device=device, download_root=model_dir)
+    if progress_emitter:
+        progress_emitter("stage_start", "load_asr")
     model = load_model(
         model_name,
         device=device,
@@ -159,8 +216,10 @@ def cli():
         dtype=dtype,
         vad_options={"vad_onset": vad_onset, "vad_offset": vad_offset},
     )
+    if progress_emitter:
+        progress_emitter("stage_end", "load_asr")
 
-    for audio_path in args.pop("audio"):
+    for audio_path in audio_paths:
         audio = load_audio(audio_path)
         # >> VAD & ASR
         print(">>Performing transcription...")
@@ -169,6 +228,7 @@ def cli():
             batch_size=batch_size,
             chunk_size=chunk_size,
             print_progress=print_progress,
+            progress_callback=progress_callback(audio_path),
         )
         results.append((result, audio_path))
 
@@ -181,10 +241,15 @@ def cli():
     if not no_align:
         tmp_results = results
         results = []
+        if progress_emitter:
+            progress_emitter("stage_start", "load_align")
         align_model, align_metadata = load_align_model(
             align_language, device, model_name=align_model
         )
+        if progress_emitter:
+            progress_emitter("stage_end", "load_align")
         for result, audio_path in tmp_results:
+            align_progress = progress_callback(audio_path)
             # >> Align
             if len(tmp_results) > 1:
                 input_audio = audio_path
@@ -198,9 +263,13 @@ def cli():
                     print(
                         f"New language found ({result['language']})! Previous was ({align_metadata['language']}), loading new alignment model for new language..."
                     )
+                    if align_progress:
+                        align_progress("stage_start", "load_align")
                     align_model, align_metadata = load_align_model(
                         result["language"], device
                     )
+                    if align_progress:
+                        align_progress("stage_end", "load_align")
                 print(">>Performing alignment...")
                 result = align(
                     result["segments"],
@@ -211,7 +280,12 @@ def cli():
                     interpolate_method=interpolate_method,
                     return_char_alignments=return_char_alignments,
                     print_progress=print_progress,
+                    progress_callback=align_progress,
                 )
+            elif align_progress and len(result["segments"]) == 0:
+                align_progress("stage_start", "align")
+                align_progress("progress", "align", done=0, total=0)
+                align_progress("stage_end", "align")
 
             results.append((result, audio_path))
 
@@ -229,12 +303,21 @@ def cli():
         tmp_results = results
         print(">>Performing diarization...")
         results = []
+        if progress_emitter:
+            progress_emitter("stage_start", "load_diarize")
         diarize_model = DiarizationPipeline(token=hf_token, device=device)
+        if progress_emitter:
+            progress_emitter("stage_end", "load_diarize")
         for result, input_audio_path in tmp_results:
+            diarize_progress = progress_callback(input_audio_path)
+            if diarize_progress:
+                diarize_progress("stage_start", "diarize")
             diarize_segments = diarize_model(
                 input_audio_path, min_speakers=min_speakers, max_speakers=max_speakers
             )
             result = assign_word_speakers(diarize_segments, result)
+            if diarize_progress:
+                diarize_progress("stage_end", "diarize")
             results.append((result, input_audio_path))
     # >> Write
     for result, audio_path in results:

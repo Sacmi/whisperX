@@ -4,7 +4,7 @@ Based on WhisperX by C. Max Bain
 Modified to use Qwen3-ForcedAligner
 """
 from dataclasses import dataclass
-from typing import Iterable, Union, List
+from typing import Callable, Iterable, List, Optional, Union
 import warnings
 
 import numpy as np
@@ -114,6 +114,7 @@ def align(
     return_char_alignments: bool = False,
     print_progress: bool = False,
     combined_progress: bool = False,
+    progress_callback: Optional[Callable[..., None]] = None,
 ) -> AlignedTranscriptionResult:
     """
     Align transcription using Qwen3-ForcedAligner to get word-level timestamps.
@@ -128,6 +129,7 @@ def align(
         return_char_alignments: Whether to return character-level alignments
         print_progress: Whether to print progress
         combined_progress: Whether this is part of combined progress
+        progress_callback: Optional machine-readable progress callback
 
     Returns:
         Aligned transcription with word-level timestamps
@@ -158,6 +160,7 @@ def align(
             return_char_alignments,
             print_progress,
             combined_progress,
+            progress_callback,
         )
 
     # Fall back to original Wav2Vec2 alignment for compatibility
@@ -178,6 +181,7 @@ def _align_with_qwen3(
     return_char_alignments: bool,
     print_progress: bool,
     combined_progress: bool,
+    progress_callback: Optional[Callable[..., None]],
 ) -> AlignedTranscriptionResult:
     """
     Align transcription using Qwen3-ForcedAligner.
@@ -188,6 +192,9 @@ def _align_with_qwen3(
     aligned_segments: List[SingleAlignedSegment] = []
     transcript_list = list(transcript)
     total_segments = len(transcript_list)
+
+    if progress_callback:
+        progress_callback("stage_start", "align")
 
     punkt_param = PunktParameters()
     punkt_param.abbrev_types = set(PUNKT_ABBREVIATIONS)
@@ -215,6 +222,10 @@ def _align_with_qwen3(
                 "text": text,
                 "words": [],
             })
+            if progress_callback:
+                progress_callback(
+                    "progress", "align", done=sdx + 1, total=total_segments
+                )
             continue
 
         # Check segment validity
@@ -226,6 +237,10 @@ def _align_with_qwen3(
                 "text": text,
                 "words": [],
             })
+            if progress_callback:
+                progress_callback(
+                    "progress", "align", done=sdx + 1, total=total_segments
+                )
             continue
 
         # Extract audio segment
@@ -289,10 +304,19 @@ def _align_with_qwen3(
             })
 
         aligned_segments += aligned_subsegments
+        if progress_callback:
+            progress_callback(
+                "progress", "align", done=sdx + 1, total=total_segments
+            )
+
+    if progress_callback and total_segments == 0:
+        progress_callback("progress", "align", done=0, total=0)
 
     # Close progress bar
     if pbar:
         pbar.close()
+    if progress_callback:
+        progress_callback("stage_end", "align")
 
     # Create word_segments list
     word_segments: List[SingleWordSegment] = []

@@ -2,6 +2,7 @@ import json
 import os
 import re
 import sys
+import time
 import zlib
 from typing import Callable, Optional, TextIO
 
@@ -148,11 +149,70 @@ def exact_div(x, y):
 
 
 def str2bool(string):
-    str2val = {"True": True, "False": False}
-    if string in str2val:
-        return str2val[string]
+    str2val = {"true": True, "false": False}
+    normalized = string.lower()
+    if normalized in str2val:
+        return str2val[normalized]
     else:
-        raise ValueError(f"Expected one of {set(str2val.keys())}, got {string}")
+        raise ValueError(
+            "Expected one of {'True', 'False', 'true', 'false'}, " f"got {string}"
+        )
+
+
+class ProgressEmitter:
+    def __init__(self, stream: TextIO, min_interval: float = 0.1):
+        self.stream = stream
+        self.min_interval = min_interval
+        self._last_emit_time = {}
+        self._last_progress = {}
+
+    def __call__(
+        self,
+        event: str,
+        stage: str,
+        done: Optional[int] = None,
+        total: Optional[int] = None,
+        file: Optional[str] = None,
+    ) -> None:
+        key = (stage, file)
+
+        if event == "stage_start":
+            self._last_emit_time.pop(key, None)
+            self._last_progress.pop(key, None)
+        elif event == "progress":
+            if done is None or total is None:
+                raise ValueError("Progress events require done and total")
+
+            progress = (done, total)
+            is_final = done == total
+            if is_final and self._last_progress.get(key) == progress:
+                return
+
+            now = time.monotonic()
+            last_emit_time = self._last_emit_time.get(key)
+            if (
+                not is_final
+                and last_emit_time is not None
+                and now - last_emit_time < self.min_interval
+            ):
+                return
+
+            self._last_emit_time[key] = now
+            self._last_progress[key] = progress
+
+        payload = {"event": event, "stage": stage}
+        if event == "progress":
+            payload.update(done=int(done), total=int(total))
+        if file is not None:
+            payload["file"] = file
+
+        line = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        self.stream.write(line + "\n")
+        self.stream.flush()
+
+        if event == "stage_end":
+            self._last_emit_time.pop(key, None)
+            self._last_progress.pop(key, None)
 
 
 def optional_int(string):

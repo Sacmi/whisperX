@@ -119,6 +119,26 @@ whisperx audio.wav \
   --hf_token YOUR_TOKEN
 ```
 
+Machine-readable progress is available as JSON Lines on stdout:
+```bash
+whisperx audio.wav --progress_json true --output_format json
+```
+
+Each line is a flushed JSON object. Human-readable output is redirected to
+stderr while this option is enabled, and `--print_progress` can be enabled at
+the same time. Example events:
+```json
+{"event":"stage_start","stage":"vad"}
+{"event":"progress","stage":"transcribe","done":8,"total":12}
+{"event":"stage_end","stage":"transcribe"}
+```
+
+Pipeline stages are `vad`, `transcribe`, `align`, and `diarize`. Model loading
+uses the non-countable stages `load_asr`, `load_align`, and `load_diarize`.
+Countable stages always emit a final event where `done` equals `total`,
+including `0/0` for an empty stage. With multiple input files, pipeline events
+contain the original audio path in the `file` field and totals are per file.
+
 ### Python Usage
 
 Basic transcription:
